@@ -7,7 +7,7 @@ source "${SCRIPT_DIR}/lib.sh"
 
 usage() {
     cat <<'EOF'
-Usage: shell.sh [arm64|amd64|i386] [command...]
+Usage: shell.sh [arm64|amd64|arm32|i386] [command...]
 
 Open an interactive shell (default) or run a command in the php-src container
 for the given architecture. The architecture may be omitted, in which case the

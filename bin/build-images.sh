@@ -9,7 +9,7 @@ usage() {
     cat <<'EOF'
 Usage: build-images.sh [-h|--help]
 
-Rebuild the three php-src development images (arm64, amd64, i386) from the
+Rebuild the four php-src development images (arm64, amd64, arm32, i386) from
 Dockerfiles in the workspace root. Takes no other arguments; bin/setup.sh runs
 this as its last step unless given --no-build.
 EOF
@@ -59,6 +59,7 @@ run_docker buildx inspect "${BUILDER}" >/dev/null 2>&1 \
 
 build_image arm64 Dockerfile
 build_image amd64 Dockerfile
+build_image arm32 Dockerfile
 build_image i386 Dockerfile.i386
 
 echo "All images built."

@@ -7,7 +7,7 @@ source "${SCRIPT_DIR}/lib.sh"
 
 usage() {
     cat <<'EOF'
-Usage: make.sh [arm64|amd64|i386] [make args...]
+Usage: make.sh [arm64|amd64|arm32|i386] [make args...]
 
 Run make in the out-of-tree build directory for the given architecture
 (/php-src/build/<arch>), inside the matching container. The architecture may be

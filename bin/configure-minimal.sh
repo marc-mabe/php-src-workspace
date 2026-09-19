@@ -7,7 +7,7 @@ source "${SCRIPT_DIR}/lib.sh"
 
 usage() {
     cat <<'EOF'
-Usage: configure-minimal.sh [arm64|amd64|i386] [extra configure args...]
+Usage: configure-minimal.sh [arm64|amd64|arm32|i386] [extra configure args...]
 
 Run ./buildconf and ./configure with a minimal debug build:
   --disable-all --enable-debug --enable-zend-test --enable-zend-int64

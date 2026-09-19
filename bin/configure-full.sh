@@ -7,7 +7,7 @@ source "${SCRIPT_DIR}/lib.sh"
 
 usage() {
     cat <<'EOF'
-Usage: configure-full.sh [arm64|amd64|i386] [extra configure args...]
+Usage: configure-full.sh [arm64|amd64|arm32|i386] [extra configure args...]
 
 Run ./buildconf and ./configure with a broad set of development extensions.
 When run on the host, this automatically executes inside the matching Docker
@@ -80,8 +80,9 @@ FULL_CONFIGURE_ARGS=(
     --enable-dba
 )
 
-# 64-bit only: libzip-dev:i386 is not published for Ubuntu 24.04 multilib.
-if ! arch_is_32bit "${arch}"; then
+# libzip-dev:i386 is not published for Ubuntu 24.04 multilib. This is about
+# i386 specifically, not about 32-bit: the armhf image has libzip-dev.
+if ! arch_is_i386 "${arch}"; then
     FULL_CONFIGURE_ARGS+=(--with-zip)
 fi
 

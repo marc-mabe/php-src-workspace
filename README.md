@@ -26,16 +26,17 @@ there quiet. A submodule's `.git` is a file pointing into `.git/modules/`, so
 ask git for the path rather than assuming `php-src/.git/info/`:
 
 ```shell
-printf '/build/arm64/\n/build/amd64/\n/build/i386/\n' \
+printf '/build/arm64/\n/build/amd64/\n/build/arm32/\n/build/i386/\n' \
     >> "$(git -C php-src rev-parse --path-format=absolute --git-path info/exclude)"
 ```
 
-Run php-src builds and tests in isolated containers for three architectures:
+Run php-src builds and tests in isolated containers for four architectures:
 
 | Container | Platform       | Use case              |
 |-----------|----------------|-----------------------|
 | `arm64`   | `linux/arm64`  | 64-bit ARM (aarch64)  |
 | `amd64`   | `linux/amd64`  | 64-bit x86_64         |
+| `arm32`   | `linux/arm/v7` | 32-bit ARM (armv7l)   |
 | `i386`    | `linux/amd64` + multilib | 32-bit i386 (via `-m32`) |
 
 Containers mount the `php-src` submodule at `/php-src` (the working directory)
@@ -67,11 +68,15 @@ Which containers run natively and which are emulated depends on the host:
 |-----------|---------------|-----------|--------------|-------------|
 | `arm64`   | native        | QEMU      | QEMU         | native      |
 | `amd64`   | Rosetta, else QEMU | native | native    | QEMU        |
+| `arm32`   | QEMU          | QEMU      | QEMU         | QEMU¹      |
 | `i386`    | QEMU          | QEMU      | native       | QEMU        |
 
 - `i386` is the amd64 image with multilib (`-m32`). Rosetta translates x86_64
   only, so it never applies there; on a 64-bit x86 host the CPU runs 32-bit code
-  natively.
+  natively. `arm32` is a real armhf image, so it needs none of that.
+- ¹ An arm64 CPU *may* execute 32-bit ARM, but Apple Silicon does not, and the
+  kernel advertising `CONFIG_COMPAT` makes binfmt skip `qemu-arm` as
+  unnecessary. `bin/setup.sh` registers it explicitly; see Troubleshooting.
 - The zip extension is disabled in the i386 image because `libzip-dev:i386` is
   not published for Ubuntu 24.04.
 - Rosetta is currently broken on macOS 27.0; `bin/shell.sh` probes for it and
@@ -88,7 +93,7 @@ From the workspace root:
 This will:
 
 1. Create and start a Lima VM named `php-src-docker` with Docker and multi-arch support
-2. Build the three development images
+2. Build the four development images
 
 Open a shell in a container:
 
@@ -125,7 +130,7 @@ else starts the pass-through arguments.
 
 `configure-minimal.sh` and `configure-full.sh` automatically run inside the
 matching container when invoked from the host. Each configures an out-of-tree
-build in `php-src/build/<arch>`, so the three architectures coexist and the
+build in `php-src/build/<arch>`, so the four architectures coexist and the
 source tree stays clean:
 
 ```shell
@@ -175,7 +180,7 @@ at the top keeps them out of `git status`.
 | File | Purpose |
 |------|---------|
 | `lima.yaml` | Lima VM definition (Docker + Rosetta + QEMU binfmt) |
-| `Dockerfile` | 64-bit dev image (arm64/amd64) |
+| `Dockerfile` | Dev image for any native platform (arm64, amd64, arm32) |
 | `Dockerfile.i386` | 32-bit dev image (amd64 + i386 multilib, like CI) |
 | `bin/setup.sh` | Prepare the container environment and build the images |
 | `bin/shell.sh` | Run a shell or command in an arch-specific container |
@@ -307,6 +312,19 @@ docker run --privileged --rm tonistiigi/binfmt --install all
 ```
 
 `./bin/setup.sh --no-build` does this for you on either backend.
+
+**32-bit ARM fails with `exec format error`**
+
+`qemu-arm` is missing. On an arm64 host the kernel is built with
+`CONFIG_COMPAT`, so it claims AArch32 support and binfmt installers skip the
+handler as unnecessary -- but Apple Silicon does not implement AArch32 at EL0,
+so nothing can run the binaries. `bin/setup.sh` registers the handler directly
+against the VM's `/usr/bin/qemu-arm`.
+
+The docker daemon caches its supported platforms at startup, so registering a
+handler while it is running has no effect until it restarts. `bin/setup.sh`
+restarts it as its next step; if you register one by hand, restart the daemon
+afterwards.
 
 **Bind mount is empty inside the container**
 

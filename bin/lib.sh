@@ -64,6 +64,7 @@ arch_canonical() {
         arm64|aarch64) printf 'arm64\n' ;;
         amd64|x86_64) printf 'amd64\n' ;;
         i386|i686|x86) printf 'i386\n' ;;
+        arm32|armv7|armv7l|armhf|arm) printf 'arm32\n' ;;
         *) return 1 ;;
     esac
 }
@@ -72,10 +73,13 @@ arch_is_valid() {
     arch_canonical "${1:-}" >/dev/null 2>&1
 }
 
-# Docker --platform for an arch. i386 runs 32-bit binaries in an amd64 image.
+# Docker --platform for an arch. i386 is the odd one out: Ubuntu publishes no
+# 32-bit x86 image, so it is the amd64 image built with multilib. arm32 has a
+# real armhf image, so it gets its own platform.
 arch_platform() {
     case "$(arch_canonical "$1")" in
         arm64) printf 'linux/arm64\n' ;;
+        arm32) printf 'linux/arm/v7\n' ;;
         *) printf 'linux/amd64\n' ;;
     esac
 }
@@ -85,6 +89,15 @@ arch_image() {
 }
 
 arch_is_32bit() {
+    case "$(arch_canonical "$1")" in
+        i386|arm32) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# 32-bit x86 specifically. Several things are about multilib and the x87 FPU
+# rather than about word size, so they must not catch arm32.
+arch_is_i386() {
     [[ "$(arch_canonical "$1")" == i386 ]]
 }
 
@@ -110,6 +123,8 @@ arch_build_env() {
     arch="$(arch_canonical "$1")"
     fpmath="$(arch_fpmath_flag)"
 
+    # Only i386 needs this: it is a multilib build inside the amd64 image. The
+    # armhf image is native, so its default toolchain is already correct.
     [[ "${arch}" == i386 ]] || return 0
 
     cat <<EOF
@@ -120,9 +135,11 @@ LDFLAGS=-L/usr/lib/i386-linux-gnu
 EOF
 }
 
-# Extra ./configure arguments an arch needs.
+# Extra ./configure arguments an arch needs. Only the i386 multilib build has
+# to be told what it is building for; in the native armhf image config.guess
+# already reports armv7l.
 arch_configure_args() {
-    if arch_is_32bit "$1" && [[ "$(uname -m)" != i?86 ]]; then
+    if arch_is_i386 "$1" && [[ "$(uname -m)" != i?86 ]]; then
         printf '%s\n' --build=i686-pc-linux-gnu
     fi
 }
@@ -217,7 +234,7 @@ parse_args() {
     if [[ ${#head[@]} -eq 1 ]]; then
         if ! arch_is_valid "${head[0]}"; then
             warn "Unsupported architecture: ${head[0]}" \
-                 "Expected arm64, amd64 or i386."
+                 "Expected arm64, amd64, arm32 or i386."
             usage >&2
             exit 1
         fi
@@ -227,7 +244,7 @@ parse_args() {
 
     ARCH="$(arch_host)" || die \
         "Cannot map the host architecture '$(uname -m)' to a container." \
-        "Pass one explicitly: arm64, amd64 or i386."
+        "Pass one explicitly: arm64, amd64, arm32 or i386."
     warn "Using host architecture ${ARCH} (no architecture given)."
 }
 
