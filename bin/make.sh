@@ -30,9 +30,17 @@ arch="${ARCH}"
 
 build_dir="$(php_build_dir "${CONTAINER_REPO}" "${arch}")"
 
+# Arguments are quoted individually, so a make variable holding spaces arrives
+# as one word: `make.sh i386 -- test TEST_PHP_ARGS="-q -j10"`. Joining them into
+# a bare string instead would let the container shell re-split it.
+#
+# The no-argument default is the exception: $(nproc) has to be expanded by the
+# container, which has its own CPU count, so it goes in unquoted.
 if [[ ${#ARGS[@]} -eq 0 ]]; then
-    ARGS=(-j'"$(nproc)"')
+    make_cmd='exec make -j"$(nproc)"'
+else
+    make_cmd="exec make $(printf '%q ' "${ARGS[@]}")"
 fi
 
 exec "${SCRIPT_DIR}/shell.sh" "${arch}" \
-    "cd $(printf '%q' "${build_dir}") && exec make ${ARGS[*]}"
+    "cd $(printf '%q' "${build_dir}") && ${make_cmd}"
