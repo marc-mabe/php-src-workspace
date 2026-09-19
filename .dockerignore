@@ -1,0 +1,4 @@
+# The php-src tree is bind-mounted at runtime, never part of the build context.
+php-src/
+tmp/
+.git/

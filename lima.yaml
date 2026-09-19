@@ -1,0 +1,107 @@
+# Lima VM with Docker for multi-arch php-src testing.
+#
+# Usage:
+#   ./bin/setup.sh
+#
+# See README.md for details.
+
+minimumLimaVersion: 2.0.0
+
+vmType: vz
+
+vmOpts:
+  vz:
+    rosetta:
+      # Enables fast amd64 containers on Apple Silicon (no-op on Intel Macs).
+      enabled: true
+      binfmt: true
+
+# cpus is deliberately unset: bin/setup.sh passes the host's count, since
+# lima's own default is min(4, host cores) and there is no "all" setting.
+memory: 8GiB
+disk: 64GiB
+
+base:
+  - template:_images/ubuntu-lts
+  - template:_default/mounts
+
+# The default home mount is read-only; builds need a writable tree.
+mounts:
+  - location: "~"
+    writable: true
+
+containerd:
+  system: false
+  user: false
+
+provision:
+  - mode: system
+    script: |
+      #!/bin/sh
+      sed -i 's/host.lima.internal.*/host.lima.internal host.docker.internal/' /etc/hosts
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      command -v docker >/dev/null 2>&1 && exit 0
+      export DEBIAN_FRONTEND=noninteractive
+      curl -fsSL https://get.docker.com | sh
+      systemctl disable --now docker.service docker.socket containerd.service containerd.socket || true
+      systemctl mask docker.service docker.socket containerd.service containerd.socket || true
+      apt-get install -y uidmap dbus-user-session qemu-user-binfmt
+  - mode: user
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      mkdir -p "${HOME}/.config/docker"
+      if [[ ! -f "${HOME}/.config/docker/daemon.json" ]]; then
+        cat > "${HOME}/.config/docker/daemon.json" <<'EOF'
+      {
+        "features": {
+          "cdi": true,
+          "containerd-snapshotter": false
+        }
+      }
+      EOF
+      fi
+  - mode: user
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      systemctl --user start dbus
+      dockerd-rootless-setuptool.sh install
+      docker context use rootless
+  # binfmt is registered by bin/setup.sh after Docker is ready.
+
+probes:
+  - script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      if ! timeout 30s bash -c "until command -v docker >/dev/null 2>&1; do sleep 3; done"; then
+        echo >&2 "docker is not installed yet"
+        exit 1
+      fi
+      if ! timeout 30s bash -c "until pgrep rootlesskit; do sleep 3; done"; then
+        echo >&2 "rootlesskit (used by rootless docker) is not running"
+        exit 1
+      fi
+    hint: See "/var/log/cloud-init-output.log" in the guest
+
+hostResolver:
+  hosts:
+    host.docker.internal: host.lima.internal
+
+portForwards:
+  - guestSocket: "/run/user/{{.UID}}/docker.sock"
+    hostSocket: "{{.Dir}}/sock/docker.sock"
+
+message: |
+  php-src Docker VM is ready.
+
+  Run from the workspace root:
+    ./bin/setup.sh
+
+  The scripts run docker inside this VM and need nothing on the host. To drive
+  it from a host docker CLI as well, optionally:
+    docker context create lima-{{.Name}} --docker "host=unix://{{.Dir}}/sock/docker.sock"
+    docker context use lima-{{.Name}}

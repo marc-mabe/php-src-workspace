@@ -1,0 +1,73 @@
+# Dev image for 32-bit i386 builds using multilib on amd64.
+# Matches the approach used by php-src CI (.github/actions/apt-x32).
+FROM --platform=linux/amd64 ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LANG=C.UTF-8
+ENV PHP_SRC_DOCKER=1
+
+RUN set -eux; \
+dpkg --add-architecture i386; \
+apt-get update -y; \
+apt-get install -y --no-install-recommends \
+    autoconf \
+    bison \
+    build-essential \
+    ca-certificates \
+    curl \
+    firebird-dev:i386 \
+    g++-multilib \
+    gcc-multilib \
+    git \
+    libbz2-dev:i386 \
+    libc6:i386 \
+    libcurl4-openssl-dev:i386 \
+    libffi-dev:i386 \
+    libfreetype6-dev:i386 \
+    libgmp-dev:i386 \
+    libicu-dev:i386 \
+    libjpeg-dev:i386 \
+    libonig-dev:i386 \
+    libpng-dev:i386 \
+    libpq-dev:i386 \
+    libreadline-dev:i386 \
+    libsasl2-dev:i386 \
+    libsodium-dev:i386 \
+    libsqlite3-dev:i386 \
+    libssl-dev:i386 \
+    libwebp-dev:i386 \
+    libxml2-dev:i386 \
+    libxpm-dev:i386 \
+    libxslt1-dev:i386 \
+    locales \
+    make \
+    pkg-config:i386 \
+    re2c \
+    unzip \
+    wget \
+    zlib1g-dev:i386; \
+locale-gen en_US.UTF-8; \
+rm -rf /var/lib/apt/lists/*
+
+# The amd64 `locale` from libc-bin traps under Rosetta with "Unable to open
+# /proc/self/exe", and ext/standard/tests/strings/setlocale_*.phpt shell out to
+# `locale -a` to discover the installed locales. Rosetta only translates x86-64,
+# so a 32-bit x86 binary is handed to the qemu-i386 binfmt registration instead --
+# the same emulator that runs the i386 php binary. Put that build first on PATH.
+# libc-bin is not co-installable across architectures, so extract the one file.
+RUN set -eux; \
+apt-get update -y; \
+cd /tmp; \
+apt-get download libc-bin:i386; \
+dpkg-deb -x libc-bin_*_i386.deb /tmp/libc-bin-i386; \
+install -m 0755 /tmp/libc-bin-i386/usr/bin/locale /usr/local/bin/locale; \
+rm -rf /tmp/libc-bin-i386 /tmp/libc-bin_*_i386.deb /var/lib/apt/lists/*
+
+ENV PKG_CONFIG_PATH=/usr/lib/i386-linux-gnu/pkgconfig
+ENV CFLAGS="-m32 -msse2"
+ENV CXXFLAGS="-m32 -msse2"
+ENV LDFLAGS="-L/usr/lib/i386-linux-gnu"
+
+WORKDIR /php-src
+
+CMD ["bash"]
