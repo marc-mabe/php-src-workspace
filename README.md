@@ -69,18 +69,19 @@ Which containers run natively and which are emulated depends on the host:
 | `arm64`   | native        | QEMU      | QEMU         | native      |
 | `amd64`   | Rosetta, else QEMU | native | native    | QEMU        |
 | `arm32`   | QEMU          | QEMU      | QEMU         | QEMU¹      |
-| `i386`    | QEMU          | QEMU      | native       | QEMU        |
+| `i386`    | Rosetta + QEMU | QEMU     | native       | QEMU        |
 
 - `i386` is the amd64 image with multilib (`-m32`). Rosetta translates x86_64
-  only, so it never applies there; on a 64-bit x86 host the CPU runs 32-bit code
-  natively. `arm32` is a real armhf image, so it needs none of that.
+  only, so the `-m32` binaries it builds always run under QEMU, while the x86_64
+  toolchain goes through Rosetta like amd64; on a 64-bit x86 host the CPU runs
+  32-bit code natively. `arm32` is a real armhf image, so it needs none of that.
 - ¹ An arm64 CPU *may* execute 32-bit ARM, but Apple Silicon does not, and the
   kernel advertising `CONFIG_COMPAT` makes binfmt skip `qemu-arm` as
   unnecessary. `bin/setup.sh` registers it explicitly; see Troubleshooting.
 - The zip extension is disabled in the i386 image because `libzip-dev:i386` is
   not published for Ubuntu 24.04.
-- Rosetta is currently broken on macOS 27.0; `bin/shell.sh` probes for it and
-  falls back to QEMU. See Troubleshooting.
+- Rosetta's translation cache is broken on macOS 27.0; `bin/shell.sh` probes
+  for it and falls back to plain Rosetta, then to QEMU. See Troubleshooting.
 
 ## Quick start
 
@@ -175,6 +176,104 @@ PHP_SRC_BUILD_DIR=/php-src/build/arm64-nojit ./bin/configure-minimal.sh arm64 --
 not collide with it. They are untracked content in the submodule; the clone step
 at the top keeps them out of `git status`.
 
+### Compiler cache
+
+Every container compiles through [ccache](https://ccache.dev/), so `make clean`,
+switching php-src branches and reconfiguring only recompile what actually
+changed. It matters most for `arm32`, where a cache hit skips the emulated
+compiler entirely. The first build of anything is not faster.
+
+The cache is the docker volume `php-src-ccache` (inside the Lima VM under
+macOS), shared by all architectures and capped at 2G, least recently used
+entries evicted first.
+
+```shell
+./bin/shell.sh arm64 ccache -s                    # hit rate and size
+./bin/shell.sh arm64 ccache -C                    # clear it
+PHP_SRC_CCACHE=0 ./bin/make.sh arm64              # bypass it for one run
+```
+
+## Benchmarking and profiling
+
+`bench.sh` runs the workloads of php-src's own `BENCHMARKING` CI job --
+`Zend/bench.php`, the Symfony Demo and WordPress, each with and without the
+tracing JIT -- against a release build of the checkout:
+
+```shell
+./bin/bench.sh                 # host arch: callgrind and memory
+./bin/bench.sh -- memory       # only the fast one
+./bin/bench.sh -- callgrind    # only instruction counts (tens of minutes)
+```
+
+- **callgrind** runs upstream's `benchmark/benchmark.php`: instructions per
+  request, plus the callgrind profiles. The counts do not depend on the
+  machine's speed or load, so runs on different hosts of the same architecture
+  compare directly, and amd64 numbers are comparable with php-src CI.
+- **memory** (`bin/bench-memory.php`): peak RSS of the `php-cgi` process and
+  `memory_get_peak_usage()` of a request, same workloads and settings.
+
+Results land in `bench-results/<time>-<host>-<arch>-<commit>/` (not version
+controlled): `callgrind.json`, `memory.json`, `meta.json` (host, CPU, kernel,
+commit, compiler), the build's `php -v`/`php -m`/configure line, the
+`callgrind.out.*` profiles and the logs. Copy the directories from each machine
+into one place to compare them.
+
+The build is `php-src/build/<arch>-bench`, configured by `configure-bench.sh`
+with the CI job's flags (`--disable-debug --with-valgrind`, mbstring, sockets,
+mysqli, openssl, gmp, pdo_sqlite) on first use and rebuilt incrementally on every
+run, so it always matches the checkout. `PHP_SRC_BUILD_VARIANT=bench` reaches
+the same directory with the other scripts:
+
+```shell
+PHP_SRC_BUILD_VARIANT=bench ./bin/make.sh
+```
+
+WordPress needs MySQL: every run starts MariaDB inside the container with an
+empty database, as CI does. The Symfony and WordPress checkouts are cloned once
+into `php-src/benchmark/repos/`; add that and `benchmark/profiles/` to the
+submodule's `info/exclude` along with the build directories.
+
+### Only native numbers mean anything
+
+Under Rosetta or QEMU, perf samples the emulator and valgrind does not run, so
+`bench.sh` refuses an architecture the host does not execute itself
+(`PHP_SRC_BENCH_EMULATED=1` forces it). For the full picture, run the same
+command on each machine:
+
+| Host | Native arch | perf |
+|------|-------------|------|
+| Apple Silicon Mac (`lima`) | `arm64` | software events only (`task-clock`, `cpu-clock`); the VM has no hardware counters |
+| x86-64 Linux (`native`) | `amd64` (and `i386`) | everything, including `cycles` and `instructions` |
+| arm64 Linux (`native`) | `arm64` | everything |
+
+The benchmark tools (valgrind, perf, heaptrack, GNU time, MariaDB) are only in
+the arm64 and amd64 images.
+
+### Profiling by hand
+
+`PHP_SRC_PROFILE=1` gives any container what perf, valgrind and heaptrack need:
+`CAP_PERFMON`, `CAP_SYS_PTRACE` and no seccomp filter. Under Lima it also lowers
+`kernel.perf_event_paranoid` in the VM, because rootless docker's capabilities
+do not count for perf; on a native host with rootful docker nothing on the host
+changes.
+
+```shell
+PHP_SRC_PROFILE=1 ./bin/shell.sh arm64
+cd /php-src/build/arm64-bench
+# Sampling profile; opcache.jit_debug=0x10 writes /tmp/perf-<pid>.map so JIT code has names
+perf record -g -- sapi/cli/php -d opcache.enable_cli=1 -d opcache.jit=tracing -d opcache.jit_debug=0x10 ../../Zend/bench.php
+perf report
+# Instruction-level profile of one script
+valgrind --tool=callgrind sapi/cli/php ../../Zend/bench.php
+# Heap profiles: USE_ZEND_ALLOC=0 makes every allocation visible instead of
+# the Zend allocator's 2 MiB chunks
+USE_ZEND_ALLOC=0 valgrind --tool=massif sapi/cli/php script.php && ms_print massif.out.*
+USE_ZEND_ALLOC=0 heaptrack sapi/cli/php script.php
+```
+
+`setarch "$(uname -m)" -R <command>` switches ASLR off for one command, which
+`bench.sh` does to reduce noise (CI switches it off machine-wide).
+
 ## Files
 
 | File | Purpose |
@@ -187,6 +286,9 @@ at the top keeps them out of `git status`.
 | `bin/configure-minimal.sh` | Minimal `./configure` (`--disable-all --enable-debug --enable-zend-test`) |
 | `bin/configure-full.sh` | Full development `./configure` wrapper per architecture |
 | `bin/lib.sh` | Shared shell library: arch table, paths, VM access, configure |
+| `bin/configure-bench.sh` | Release `./configure` for benchmarking (`build/<arch>-bench`) |
+| `bin/bench.sh` | Run the callgrind and memory benchmarks, store results in `bench-results/` |
+| `bin/bench-memory.php` | Memory measurements of the benchmark workloads (run by `bench.sh`) |
 | `bin/make.sh` | Run make in the per-arch build directory |
 | `bin/build-images.sh` | Rebuild images only |
 | `php-src/` | Submodule: the php-src checkout, mounted at `/php-src` |
@@ -263,20 +365,34 @@ limactl start php-src-docker --mount-writable
 
 A Rosetta bug, not a problem with your command. Rosetta aborts on signal return
 as soon as the translated guest does anything non-trivial. Observed on macOS
-27.0 (build 26A428) on a freshly created VM: 8/8 failures compiling and running
-a one-line C program under Rosetta, 0/10 under QEMU, arm64 unaffected.
+27.0 (builds 26A428 and 26A434) with the translation cache
+(`--device=lima-vm.io/rosetta=cached`): 8/8 failures compiling and running a
+one-line C program. Plain Rosetta, without the cache, passes 10/10.
 
-This affects amd64 only; i386 always uses QEMU regardless.
+`bin/shell.sh` probes on first use per Lima instance and macOS build, tries the
+modes fastest first, and caches the first that works in
+`~/.cache/php-src-workspace/rosetta-<instance>-<build>`:
 
-`bin/shell.sh` probes Rosetta on first use per Lima instance and macOS build,
-caches the verdict in `~/.cache/php-src-workspace/rosetta-<instance>-<build>`,
-and falls back to QEMU when it is broken. QEMU is considerably slower but
-correct. An OS update changes the cache key, so Rosetta is re-probed
-automatically; delete the cache file to force it sooner.
+| Mode     | How |
+|----------|-----|
+| `cached` | Rosetta with its ahead-of-time translation cache (CDI device) |
+| `plain`  | Rosetta alone, through the VM's binfmt handler |
+| `qemu`   | QEMU; the VM's Rosetta binfmt handler is switched off |
+
+An OS update changes the cache key, so the modes are re-probed automatically;
+delete the cache file to force it sooner. The mode applies to amd64 and to the
+x86_64 toolchain of i386.
+
+Rosetta's binfmt handler is registered after QEMU's, so while it is enabled it
+handles every x86_64 binary; leaving out the device alone does not give you
+QEMU. The `qemu` mode therefore disables it VM-wide, and the other modes
+re-enable it on every run (Lima turns it back on at boot). Containers started
+concurrently in different modes would affect each other.
 
 ```shell
-PHP_SRC_ROSETTA=1 ./bin/shell.sh amd64 ...   # force Rosetta (amd64 only)
-PHP_SRC_ROSETTA=0 ./bin/shell.sh amd64 ...   # force QEMU
+PHP_SRC_ROSETTA=cached ./bin/shell.sh amd64 ...   # force the cache (also: 1)
+PHP_SRC_ROSETTA=plain  ./bin/shell.sh amd64 ...   # force Rosetta without it
+PHP_SRC_ROSETTA=qemu   ./bin/shell.sh amd64 ...   # force QEMU (also: 0)
 ```
 
 **`No rule to make target '/php-src/build-amd64/...'` after moving a build directory**

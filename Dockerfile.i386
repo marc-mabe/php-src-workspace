@@ -6,6 +6,12 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
 ENV PHP_SRC_DOCKER=1
 
+# python3 is listed explicitly, and natively rather than :i386: enchant pulls in
+# hunspell-en-us -> dictionaries-common, an Architecture: all package whose
+# `Depends: python3` apt otherwise resolves to python3:i386. Configuring that
+# package runs the i386 interpreter, which the emulator building this image
+# cannot execute ("Invalid ELF image for this architecture"). The native build
+# satisfies the same dependency and runs.
 RUN set -eux; \
 dpkg --add-architecture i386; \
 apt-get update -y; \
@@ -14,24 +20,34 @@ apt-get install -y --no-install-recommends \
     bison \
     build-essential \
     ca-certificates \
+    ccache \
     curl \
     firebird-dev:i386 \
+    freetds-dev:i386 \
     g++-multilib \
     gcc-multilib \
     git \
+    libargon2-dev:i386 \
+    libavif-dev:i386 \
     libbz2-dev:i386 \
     libc6:i386 \
     libcurl4-openssl-dev:i386 \
+    libdb-dev:i386 \
+    libenchant-2-dev:i386 \
     libffi-dev:i386 \
     libfreetype6-dev:i386 \
+    libgdbm-dev:i386 \
     libgmp-dev:i386 \
     libicu-dev:i386 \
     libjpeg-dev:i386 \
+    libldap-dev:i386 \
+    liblmdb-dev:i386 \
     libonig-dev:i386 \
     libpng-dev:i386 \
     libpq-dev:i386 \
     libreadline-dev:i386 \
     libsasl2-dev:i386 \
+    libsnmp-dev:i386 \
     libsodium-dev:i386 \
     libsqlite3-dev:i386 \
     libssl-dev:i386 \
@@ -42,12 +58,18 @@ apt-get install -y --no-install-recommends \
     locales \
     make \
     pkg-config:i386 \
+    python3 \
     re2c \
+    unixodbc-dev:i386 \
     unzip \
     wget \
     zlib1g-dev:i386; \
 locale-gen en_US.UTF-8; \
 rm -rf /var/lib/apt/lists/*
+
+# Ubuntu's ccache shims cover gcc and g++ but not cc and c++, and PHP's
+# configure picks `cc`; without these the compiler cache is silently bypassed.
+RUN ln -sf ../../bin/ccache /usr/lib/ccache/cc; ln -sf ../../bin/ccache /usr/lib/ccache/c++
 
 # The amd64 `locale` from libc-bin traps under Rosetta with "Unable to open
 # /proc/self/exe", and ext/standard/tests/strings/setlocale_*.phpt shell out to
@@ -66,7 +88,17 @@ rm -rf /tmp/libc-bin-i386 /tmp/libc-bin_*_i386.deb /var/lib/apt/lists/*
 ENV PKG_CONFIG_PATH=/usr/lib/i386-linux-gnu/pkgconfig
 ENV CFLAGS="-m32 -msse2"
 ENV CXXFLAGS="-m32 -msse2"
+ENV CPPFLAGS="-m32 -msse2"
 ENV LDFLAGS="-L/usr/lib/i386-linux-gnu"
+
+# php-src's dba db4 probe (PHP_DBA_DB_CHECK in ext/dba/config.m4) tests for the
+# library file at $prefix/$PHP_LIBDIR -- /usr/lib -- and Ubuntu ships Berkeley DB
+# at the multiarch path. Only that file test fails; the link step itself finds
+# the library through the LDFLAGS above, so a symlink where the probe looks is
+# enough to get --with-db4 detected. The path is hardcoded because gcc here is
+# the amd64 compiler driving a -m32 build, so -print-multiarch would report the
+# wrong triplet.
+RUN ln -s /usr/lib/i386-linux-gnu/libdb.so /usr/lib/libdb.so
 
 WORKDIR /php-src
 

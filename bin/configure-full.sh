@@ -44,6 +44,9 @@ FULL_CONFIGURE_ARGS=(
     --with-pdo-pgsql
     --with-pdo-sqlite
     --with-pdo-firebird
+    --with-pdo-dblib
+    --with-pdo-odbc=unixODBC
+    --with-unixODBC
     --enable-intl
     --without-pear
     --enable-gd
@@ -51,12 +54,17 @@ FULL_CONFIGURE_ARGS=(
     --with-webp
     --with-freetype
     --with-xpm
+    --with-avif
     --enable-exif
     --with-zlib
     --enable-shmop
     --enable-soap
     --enable-xmlreader
     --with-xsl
+    --with-enchant
+    --with-snmp
+    --with-ldap
+    --with-ldap-sasl
     --enable-sysvsem
     --enable-sysvshm
     --enable-sysvmsg
@@ -78,12 +86,17 @@ FULL_CONFIGURE_ARGS=(
     --with-mhash
     --with-sodium
     --enable-dba
+    --with-db4
+    --with-gdbm
+    --with-lmdb
+    --with-password-argon2
 )
 
-# libzip-dev:i386 is not published for Ubuntu 24.04 multilib. This is about
-# i386 specifically, not about 32-bit: the armhf image has libzip-dev.
+# libzip-dev, libtidy-dev and libtokyocabinet-dev are not published for Ubuntu
+# 24.04 multilib. This is about i386 specifically, not about 32-bit: the armhf
+# image has all three.
 if ! arch_is_i386 "${arch}"; then
-    FULL_CONFIGURE_ARGS+=(--with-zip)
+    FULL_CONFIGURE_ARGS+=(--with-zip --with-tidy --with-tcadb)
 fi
 
 configure_run "${arch}" "${FULL_CONFIGURE_ARGS[@]}" ${ARGS[@]+"${ARGS[@]}"}

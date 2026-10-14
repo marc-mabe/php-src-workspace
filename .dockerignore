@@ -2,3 +2,4 @@
 php-src/
 tmp/
 .git/
+bench-results/

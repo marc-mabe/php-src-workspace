@@ -1,2 +1,4 @@
 # Scratch output from probe/repro runs
 /tmp/
+# Benchmark results (bin/bench.sh), per machine; copy them where you compare
+/bench-results/

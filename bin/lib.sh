@@ -102,11 +102,16 @@ arch_is_i386() {
 }
 
 # Rosetta translates x86_64 and not 32-bit x86, so the -m32 binaries the i386
-# image produces cannot run under it. Only amd64 is a candidate, and only under
+# image produces always run under QEMU. Its toolchain is x86_64 though, so i386
+# goes through Rosetta as much as amd64 does. Only on an Apple Silicon host under
 # Lima's vz backend -- on a native Linux host there is no Rosetta to probe.
 arch_may_use_rosetta() {
     [[ "${BACKEND}" == lima ]] || return 1
-    [[ "$(arch_canonical "$1")" == amd64 ]]
+    [[ "$(arch_host)" == arm64 ]] || return 1
+    case "$(arch_canonical "$1")" in
+        amd64|i386) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 # On i386 the x87 FPU is the platform default and computes at 80-bit extended
@@ -127,10 +132,24 @@ arch_build_env() {
     # armhf image is native, so its default toolchain is already correct.
     [[ "${arch}" == i386 ]] || return 0
 
+    # CPPFLAGS gets the same flags, not just CFLAGS: autoconf's header probes
+    # preprocess with `cc -E` and CPPFLAGS alone, so that is the only way to tell
+    # them what is being built. Without -m32 the preprocessor searches the amd64
+    # multiarch include directory, /usr/include/sqltypes.h then fails to find the
+    # unixodbc.h that exists only under i386-linux-gnu, and pdo_odbc is reported
+    # missing although its headers are installed. The rest matters to the
+    # preprocessor too: -msse2 defines __SSE2__ and the _Float16 macros, and
+    # -mfpmath=sse flips __FLT_EVAL_METHOD__ from 2 (x87 extended precision) to
+    # 0 -- the very thing PHP_SRC_FPMATH is there to control. No probe in the
+    # current tree reads them, so keeping the two in sync is about not letting a
+    # future one silently answer for the wrong target.
+    local target_flags="-m32 -msse2${fpmath}"
+
     cat <<EOF
 PKG_CONFIG_PATH=/usr/lib/i386-linux-gnu/pkgconfig
-CFLAGS=-m32 -msse2${fpmath}
-CXXFLAGS=-m32 -msse2${fpmath}
+CFLAGS=${target_flags}
+CXXFLAGS=${target_flags}
+CPPFLAGS=${target_flags}
 LDFLAGS=-L/usr/lib/i386-linux-gnu
 EOF
 }
@@ -320,9 +339,67 @@ php_src_root() {
 # Out-of-tree build directory for an arch, below the given source root.
 # php-src/build/ is upstream's build-system directory; it contains only files,
 # so per-arch subdirectories sit alongside them without colliding.
+#
+# PHP_SRC_BUILD_VARIANT names a second build of the same arch next to the
+# default one: `bench` gives build/<arch>-bench, so the release build that
+# benchmarks need does not overwrite the debug build. PHP_SRC_BUILD_DIR, a full
+# path, wins over both.
 php_build_dir() {
     local root="$1" arch="$2"
-    printf '%s\n' "${PHP_SRC_BUILD_DIR:-${root}/build/$(arch_canonical "${arch}")}"
+    local dir
+    dir="${root}/build/$(arch_canonical "${arch}")${PHP_SRC_BUILD_VARIANT:+-${PHP_SRC_BUILD_VARIANT}}"
+    printf '%s\n' "${PHP_SRC_BUILD_DIR:-${dir}}"
+}
+
+# ------------------------------------------------------------------ profiling
+
+# docker run options that let perf, valgrind and heaptrack work in a container.
+# Docker's default seccomp profile blocks perf_event_open, and also personality
+# with ADDR_NO_RANDOMIZE, which `setarch -R` needs to switch ASLR off for one
+# process tree without touching the host.
+profile_docker_args() {
+    printf '%s\n' \
+        --cap-add=PERFMON \
+        --cap-add=SYS_PTRACE \
+        --security-opt=seccomp=unconfined
+}
+
+# Make the kernel let the container use perf.
+#
+# Under native rootful docker CAP_PERFMON is a real capability and overrides
+# kernel.perf_event_paranoid, so nothing on the host has to change. The Lima VM
+# runs rootless docker, where the capability only exists inside the user
+# namespace and the kernel goes by the sysctl alone -- Ubuntu's default of 4
+# forbids perf for everyone unprivileged. Lower it in the VM, which is ours,
+# and reset at every boot, so this runs every time like rosetta_binfmt does.
+profile_prepare_host() {
+    case "${BACKEND}" in
+        lima)
+            limactl shell "${LIMA_INSTANCE}" -- sudo -n sh -c '
+                [ "$(cat /proc/sys/kernel/perf_event_paranoid)" -le 1 ] \
+                    || sysctl -qw kernel.perf_event_paranoid=1
+                sysctl -qw kernel.kptr_restrict=0
+            ' || warn "Could not lower kernel.perf_event_paranoid in '${LIMA_INSTANCE}'; perf may be refused."
+            ;;
+        native)
+            if docker info --format '{{.SecurityOptions}}' 2>/dev/null | grep -q rootless \
+                    && [[ "$(cat /proc/sys/kernel/perf_event_paranoid 2>/dev/null || echo 4)" -gt 1 ]]; then
+                warn "Rootless docker with kernel.perf_event_paranoid > 1: perf will be refused." \
+                     "Allow it with: sudo sysctl kernel.perf_event_paranoid=1"
+            fi
+            ;;
+    esac
+}
+
+# Benchmarks and profiles only mean something for code running natively. Under
+# Rosetta or QEMU, perf samples the emulator and valgrind does not run at all.
+profile_warn_if_emulated() {
+    local arch
+    arch="$(arch_canonical "$1")"
+    if [[ "${arch}" != "$(arch_host)" ]]; then
+        warn "Warning: ${arch} is emulated on this $(arch_host) host." \
+             "         perf would profile the emulator, and valgrind is not expected to work."
+    fi
 }
 
 # --------------------------------------------------------------------- configure
