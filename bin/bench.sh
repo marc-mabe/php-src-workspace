@@ -68,8 +68,16 @@ if ! in_linux_container; then
     # On macOS `hostname` follows the network (ip-192-168-...); LocalHostName
     # is the name the machine was given.
     bench_host="$(scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null || hostname)"
+
+    # Read the commit here rather than in the container. A submodule checkout
+    # has a .git file pointing at ../.git/modules/php-src, outside the mount, so
+    # git cannot follow it from /php-src.
+    bench_commit="$(git -C "${REPO_ROOT}" rev-parse HEAD)" \
+        || die "Cannot read the php-src commit from ${REPO_ROOT}."
+    bench_branch="$(git -C "${REPO_ROOT}" rev-parse --abbrev-ref HEAD)"
+
     PHP_SRC_PROFILE=1 exec "${SCRIPT_DIR}/shell.sh" "${arch}" \
-        "PHP_SRC_BENCH_HOST=$(printf '%q' "${bench_host}") PHP_SRC_BACKEND_NAME=${BACKEND} $(printf '%q ' "${CONTAINER_WORKSPACE}/bin/bench.sh" "${arch}" -- "${MODES[@]}")"
+        "PHP_SRC_BENCH_HOST=$(printf '%q' "${bench_host}") PHP_SRC_BENCH_COMMIT=$(printf '%q' "${bench_commit}") PHP_SRC_BENCH_BRANCH=$(printf '%q' "${bench_branch}") PHP_SRC_BACKEND_NAME=${BACKEND} $(printf '%q ' "${CONTAINER_WORKSPACE}/bin/bench.sh" "${arch}" -- "${MODES[@]}")"
 fi
 
 # -------------------------------------------------------------- container side
@@ -78,13 +86,19 @@ build_dir="$(php_build_dir "${CONTAINER_REPO}" "${arch}")"
 php="${build_dir}/sapi/cli/php"
 php_cgi="${build_dir}/sapi/cgi/php-cgi"
 
+# The host side passes the commit and branch in. Run directly in a container,
+# git has to read them itself, which works for a plain clone but not for a
+# submodule, whose git directory lies outside the mount.
+#
 # The checkout is bind-mounted and, under rootful docker, owned by someone else
-# than the container's root; git refuses to read it without this.
+# than the container's root; git refuses to read it without safe.directory.
 git_src() {
     git -c safe.directory='*' -C "${CONTAINER_REPO}" "$@"
 }
 
-commit="$(git_src rev-parse HEAD)"
+commit="${PHP_SRC_BENCH_COMMIT:-$(git_src rev-parse HEAD)}" \
+    || die "Cannot read the php-src commit; run bench.sh from the host."
+branch="${PHP_SRC_BENCH_BRANCH:-$(git_src rev-parse --abbrev-ref HEAD)}"
 results_dir="${CONTAINER_WORKSPACE}/bench-results/$(date -u +%Y%m%d-%H%M%S)-${PHP_SRC_BENCH_HOST:-unknown}-${arch}-${commit:0:12}"
 mkdir -p "${results_dir}"
 echo "Results: ${results_dir#"${CONTAINER_WORKSPACE}/"}"
@@ -146,7 +160,7 @@ SQL
 lscpu > "${results_dir}/lscpu.txt" 2>/dev/null || true
 
 PHP_SRC_BENCH_COMMIT="${commit}" \
-PHP_SRC_BENCH_BRANCH="$(git_src rev-parse --abbrev-ref HEAD)" \
+PHP_SRC_BENCH_BRANCH="${branch}" \
 PHP_SRC_BENCH_ARCH="${arch}" \
 "${php}" -r '
     $cpu = trim((string) shell_exec("lscpu | sed -n \"s/^Model name: *//p\" | head -n1"));
