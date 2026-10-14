@@ -20,27 +20,33 @@
  * (perf's comma-separated -e syntax) and the number of runs per workload with
  * PHP_SRC_BENCH_PERF_RUNS.
  *
- * Run by bin/bench.sh, which provides the database and the ini (PHPRC).
+ * Run by bin/bench.sh in the container, which provides the database and the
+ * ini (PHPRC), or by bin/bench-macos.sh on a Mac, which sets
+ * PHP_SRC_BENCH_STAT to bin/macos/pmcstat -- perf's stand-in there, with its
+ * own fixed set of events -- and PHP_SRC_BENCH_DIR to the host's checkout.
  */
 
-$benchmarkDir = '/php-src/benchmark';
+$benchmarkDir = getenv('PHP_SRC_BENCH_DIR') ?: '/php-src/benchmark';
 require_once $benchmarkDir . '/shared.php';
 
 $phpCgi = $argv[1] ?? exit("Usage: bench-perf.php <php-cgi> <output.json>\n");
 $outFile = $argv[2] ?? exit("Usage: bench-perf.php <php-cgi> <output.json>\n");
 
+$statCommand = getenv('PHP_SRC_BENCH_STAT') ?: null;
 $events = getenv('PHP_SRC_BENCH_PERF_EVENTS')
     ?: 'duration_time,task-clock,cycles,instructions,branches,branch-misses,cache-references,cache-misses';
 $runs = (int) (getenv('PHP_SRC_BENCH_PERF_RUNS') ?: 5);
 $runs > 0 or exit("PHP_SRC_BENCH_PERF_RUNS must be a positive number.\n");
 
 function measure(string $script, ?string $cwd = null, bool $jit = false, int $warmup = 0, int $repeat = 1): array {
-    global $phpCgi, $events, $runs;
+    global $phpCgi, $statCommand, $events, $runs;
 
     $statFile = tempnam(sys_get_temp_dir(), 'perf');
 
     runCommand([
-        'perf', 'stat', '-x,', '-o', $statFile, '-r', (string) $runs, '-e', $events, '--',
+        ...($statCommand
+            ? [$statCommand, '-o', $statFile, '-r', (string) $runs, '--']
+            : ['perf', 'stat', '-x,', '-o', $statFile, '-r', (string) $runs, '-e', $events, '--']),
         $phpCgi,
         '-T' . ($warmup ? $warmup . ',' : '') . $repeat,
         '-d max_execution_time=0',
@@ -106,7 +112,7 @@ runCommand([PHP_BINARY, $wordpress . '/index.php'], $wordpress);
 $data = [];
 foreach ([false, true] as $jit) {
     $suffix = $jit ? ' JIT' : '';
-    $data['Zend/bench.php' . $suffix] = measure('/php-src/Zend/bench.php', jit: $jit);
+    $data['Zend/bench.php' . $suffix] = measure(dirname($benchmarkDir) . '/Zend/bench.php', jit: $jit);
     $data['Symfony Demo 2.2.3' . $suffix] = measure($symfony . '/public/index.php', $symfony, $jit, 50, 50);
     $data['Wordpress 6.2' . $suffix] = measure($wordpress . '/index.php', $wordpress, $jit, 50, 50);
 }

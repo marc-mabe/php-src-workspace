@@ -252,12 +252,40 @@ command on each machine:
 
 | Host | Native arch | perf |
 |------|-------------|------|
-| Apple Silicon Mac (`lima`) | `arm64` | software events only (`task-clock`, `cpu-clock`); the VM has no hardware counters |
+| Apple Silicon Mac (`lima`) | `arm64` | software events only (`task-clock`, `cpu-clock`); the VM has no hardware counters; see below |
 | x86-64 Linux (`native`) | `amd64` (and `i386`) | everything, including `cycles` and `instructions` |
 | arm64 Linux (`native`) | `arm64` | everything |
 
 The benchmark tools (valgrind, perf, heaptrack, GNU time, MariaDB) are only in
 the arm64 and amd64 images.
+
+### Cycles and instructions on a Mac
+
+Apple's hypervisor gives the Lima VM no performance counters, so inside it
+perf's `cycles`, `instructions` and the rest are `null`. `bench-macos.sh` runs
+the perf benchmark on the Mac itself instead, in a native release build
+(`php-src/build/macos-bench`):
+
+```shell
+./bin/bench-macos.sh
+PHP_SRC_BENCH_PERF_RUNS=10 ./bin/bench-macos.sh
+```
+
+`bin/macos/pmcstat` stands in for `perf stat`. It reads the counters macOS keeps
+for every process (`proc_pid_rusage`, no root needed): wall and CPU time,
+`cycles` and `instructions` over all cores, the share of both that ran on
+performance cores (`p-cycles`, `p-instructions`) and the kernel's `energy`
+estimate. `perf.json` has the same layout as the Linux one. Instructions
+vary by well under 1% between runs; cycles and times depend on which cores the
+scheduler picks, which macOS does not let a process choose -- watch `p-cycles`
+against `cycles`, and close what else is running. Branch and cache events
+would need Apple's private kperf framework and root, so they are missing.
+
+The build needs Homebrew's autoconf, bison, re2c, pkg-config, openssl@3, gmp,
+sqlite, oniguruma, libiconv and mariadb. WordPress gets a throwaway MariaDB of
+its own on port 33306; one you run yourself is not touched. `bench.sh`'s
+callgrind and memory modes have no macOS counterpart: valgrind does not run on
+current macOS, and the memory script needs GNU time.
 
 ### Profiling by hand
 
@@ -297,8 +325,11 @@ USE_ZEND_ALLOC=0 heaptrack sapi/cli/php script.php
 | `bin/configure-full.sh` | Full development `./configure` wrapper per architecture |
 | `bin/lib.sh` | Shared shell library: arch table, paths, VM access, configure |
 | `bin/configure-bench.sh` | Release `./configure` for benchmarking (`build/<arch>-bench`) |
-| `bin/bench.sh` | Run the callgrind and memory benchmarks, store results in `bench-results/` |
+| `bin/bench.sh` | Run the callgrind, memory and perf benchmarks, store results in `bench-results/` |
 | `bin/bench-memory.php` | Memory measurements of the benchmark workloads (run by `bench.sh`) |
+| `bin/bench-perf.php` | `perf stat` measurements of the benchmark workloads (run by `bench.sh` and `bench-macos.sh`) |
+| `bin/bench-macos.sh` | The perf benchmark natively on an Apple Silicon Mac, with hardware counters |
+| `bin/macos/pmcstat.c` | `perf stat` stand-in for macOS (built by `bench-macos.sh`) |
 | `bin/make.sh` | Run make in the per-arch build directory |
 | `bin/build-images.sh` | Rebuild images only |
 | `php-src/` | Submodule: the php-src checkout, mounted at `/php-src` |
