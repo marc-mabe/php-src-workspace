@@ -20,15 +20,24 @@ needed. Per request, averaged over PHP_SRC_BENCH_PERF_RUNS runs (default 5):
 
   duration_time   wall time (ns)
   task-clock      CPU time (msec)
+  user-time       the part of it spent in PHP itself
+  system-time     the part spent in the kernel on PHP's behalf
   cycles          CPU cycles, all cores
   instructions    instructions retired, all cores
   p-cycles        the part of those on performance cores
   p-instructions
   energy          the kernel's energy estimate (nJ)
 
-WordPress gets a throwaway MariaDB of its own (Homebrew's mariadbd, on port
-33306 with a temporary data directory); a MariaDB or MySQL you run yourself is
-left alone.
+cycles and instructions include the kernel's work for the process, which
+varies between runs for the file-heavy workloads (Symfony, WordPress); see
+system-time and the README before reading much into small changes.
+
+The Symfony Demo and WordPress are cloned into php-src/build/macos-bench/repos
+rather than shared with the containers' php-src/benchmark/repos: Symfony keeps
+its cache inside the project, and a cache built on one side and cleared on the
+other breaks. WordPress gets a throwaway MariaDB of its own (Homebrew's
+mariadbd, on port 33306 with a temporary data directory); a MariaDB or MySQL
+you run yourself is left alone.
 
 Needs the Xcode command line tools and, from Homebrew: autoconf, bison, re2c,
 pkg-config, openssl@3, gmp, sqlite, oniguruma, libiconv and mariadb.
@@ -173,6 +182,7 @@ PHP_SRC_BENCH_BRANCH="${branch}" \
 echo "Running perf benchmarks (bin/bench-perf.php with pmcstat)..."
 PHP_SRC_BENCH_STAT="${pmcstat}" \
 PHP_SRC_BENCH_DIR="${REPO_ROOT}/benchmark" \
+PHP_SRC_BENCH_REPOS="${build_dir}/repos" \
 "${php}" "${SCRIPT_DIR}/bench-perf.php" "${php_cgi}" "${results_dir}/perf.json" \
     > "${results_dir}/perf.log" 2>&1 \
     || die "bench-perf.php failed; see ${results_dir}/perf.log"

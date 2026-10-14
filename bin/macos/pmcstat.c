@@ -11,6 +11,15 @@
  * read from the exited child before it is reaped (waitid with WNOWAIT).
  * Branch and cache events would need the private kperf framework and root.
  *
+ * cycles and instructions include what the kernel executes on the process's
+ * behalf: an access() call costs 5,000 to 13,000 instructions depending on
+ * the path, more with an Endpoint Security client such as an EDR agent
+ * inspecting file events. How
+ * much varies with the system's state, so workloads heavy on file system calls
+ * drift between runs while the PHP code they run does not change. There is no
+ * user-mode-only count without root; user-time and system-time, which macOS
+ * does split, show how large the kernel's share is.
+ *
  * Like perf stat -r, each event is the mean over the runs, followed by the
  * standard error of that mean in percent. ASLR is switched off for the child,
  * as bench.sh does with setarch -R on Linux.
@@ -38,7 +47,11 @@ extern char **environ;
 #define _POSIX_SPAWN_DISABLE_ASLR 0x0100
 #endif
 
-enum { DURATION, TASK_CLOCK, CYCLES, INSTRUCTIONS, P_CYCLES, P_INSTRUCTIONS, ENERGY, N_EVENTS };
+enum {
+    DURATION, TASK_CLOCK, USER_TIME, SYSTEM_TIME,
+    CYCLES, INSTRUCTIONS, P_CYCLES, P_INSTRUCTIONS, ENERGY,
+    N_EVENTS
+};
 
 static const struct {
     const char *name;
@@ -46,6 +59,8 @@ static const struct {
 } events[N_EVENTS] = {
     [DURATION] = {"duration_time", "ns"},
     [TASK_CLOCK] = {"task-clock", "msec"},
+    [USER_TIME] = {"user-time", "msec"},
+    [SYSTEM_TIME] = {"system-time", "msec"},
     [CYCLES] = {"cycles", ""},
     [INSTRUCTIONS] = {"instructions", ""},
     [P_CYCLES] = {"p-cycles", ""},
@@ -106,10 +121,13 @@ static void run_once(char **argv, double *out) {
     /* ri_user_time and ri_system_time are in mach absolute time units. */
     mach_timebase_info_data_t tb;
     mach_timebase_info(&tb);
-    double cpu_ns = (double) (ri.ri_user_time + ri.ri_system_time) * tb.numer / tb.denom;
+    double user_ms = (double) ri.ri_user_time * tb.numer / tb.denom / 1e6;
+    double system_ms = (double) ri.ri_system_time * tb.numer / tb.denom / 1e6;
 
     out[DURATION] = end - start;
-    out[TASK_CLOCK] = cpu_ns / 1e6;
+    out[TASK_CLOCK] = user_ms + system_ms;
+    out[USER_TIME] = user_ms;
+    out[SYSTEM_TIME] = system_ms;
     out[CYCLES] = (double) ri.ri_cycles;
     out[INSTRUCTIONS] = (double) ri.ri_instructions;
     out[P_CYCLES] = (double) ri.ri_pcycles;

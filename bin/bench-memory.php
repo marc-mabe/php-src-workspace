@@ -67,8 +67,13 @@ function measure(string $script, ?string $cwd = null, bool $jit = false, int $wa
 /* Set-up as in benchmark.php, so this also runs on its own. */
 $symfony = $benchmarkDir . '/repos/symfony-demo-2.2.3';
 cloneRepo($symfony, 'https://github.com/php/benchmarking-symfony-demo-2.2.3.git');
-runCommand([PHP_BINARY, $symfony . '/bin/console', 'cache:clear']);
-runCommand([PHP_BINARY, $symfony . '/bin/console', 'cache:warmup']);
+
+/* A freshly built cache before every measurement, as benchmark.php does, so
+ * the JIT run does not inherit the cache the run before it left behind. */
+function warmSymfony(string $dir): void {
+    runCommand([PHP_BINARY, $dir . '/bin/console', 'cache:clear']);
+    runCommand([PHP_BINARY, $dir . '/bin/console', 'cache:warmup']);
+}
 
 $wordpress = $benchmarkDir . '/repos/wordpress-6.2';
 cloneRepo($wordpress, 'https://github.com/php/benchmarking-wordpress-6.2.git');
@@ -83,6 +88,7 @@ $data = [];
 foreach ([false, true] as $jit) {
     $suffix = $jit ? ' JIT' : '';
     $data['Zend/bench.php' . $suffix] = measure('/php-src/Zend/bench.php', jit: $jit);
+    warmSymfony($symfony);
     $data['Symfony Demo 2.2.3' . $suffix] = measure($symfony . '/public/index.php', $symfony, $jit, 50, 50);
     $data['Wordpress 6.2' . $suffix] = measure($wordpress . '/index.php', $wordpress, $jit, 50, 50);
 }

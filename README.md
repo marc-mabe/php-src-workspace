@@ -222,11 +222,50 @@ tracing JIT -- against a release build of the checkout:
   below). Per-request values follow `benchmark.php`: the whole process,
   start-up and warm-up included, divided by the measured requests.
 
+As in upstream's `benchmark.php`, the Symfony Demo's cache is cleared and
+warmed (`bin/console cache:clear` and `cache:warmup`) right before it is
+measured, with and without the JIT. The perf mode does so before every run,
+and runs Symfony one process at a time rather than with `perf stat -r`: the
+first process after a warmup still writes cache files, which `-r` would
+measure in its first repetition only.
+
 Results land in `bench-results/<time>-<host>-<arch>-<commit>/` (not version
 controlled): `callgrind.json`, `memory.json`, `perf.json`, `meta.json` (host,
 CPU, kernel, commit, compiler, valgrind and perf versions), the build's
-`php -v`/`php -m`/configure line, the `callgrind.out.*` profiles and the logs. Copy the directories from each machine
-into one place to compare them.
+`php -v`/`php -m`/configure line, the `callgrind.out.*` profiles and the logs.
+Copy the directories from each machine into one place to compare them.
+
+### Comparing two runs
+
+`bench-diff.php` compares every benchmark two result directories have in
+common, workload by workload, and writes the diff as JSON and Markdown (by
+default `diff-vs-<base>.json` and `.md` in the head directory; `-o prefix`
+puts them elsewhere). The Markdown is also printed, ready for a PR comment.
+Directories can be given by their name under `bench-results/`:
+
+```shell
+./bin/bench-diff.php 20261014-201859-...-ad14cd9117d5 20261014-203019-...-0123456789ab
+./bin/bench-diff.php -o /tmp/jit-change base-dir head-dir
+```
+
+Lower is better for every metric. A change is reported as significant only
+beyond a threshold, shown as ± next to it. callgrind and memory numbers are
+stable but not exactly reproducible -- the workloads read the clock, and
+WordPress gets a fresh database every run -- so they get a fixed noise floor,
+measured by repeating runs of one build: peak RSS (`max_rss_kib`) moved by up
+to 1% (floor 2%), `zend_peak` by a few hundred bytes (floor 0.1%), and
+`zend_peak_real`, which grows in 2 MiB chunks, not at all. perf numbers come with
+the run-to-run noise `perf stat` measured (the standard error, in percent); a
+change is significant only beyond twice the two runs' combined noise, and
+unknown when either side ran only once. That noise is measured within one run:
+drift between runs made at different times is not in it, and on macOS that
+drift can be large for Symfony and WordPress (see "Cycles and instructions on a
+Mac" below). Compare runs made back to back, ideally alternating base and head,
+and trust callgrind for small differences.
+
+The diff warns when the runs came from different machines (only callgrind
+compares there) or different architectures (nothing does). Any PHP 8.1 or later
+runs it, the host's included.
 
 The build is `php-src/build/<arch>-bench`, configured by `configure-bench.sh`
 with the CI job's flags (`--disable-debug --with-valgrind`, mbstring, sockets,
@@ -272,18 +311,41 @@ PHP_SRC_BENCH_PERF_RUNS=10 ./bin/bench-macos.sh
 ```
 
 `bin/macos/pmcstat` stands in for `perf stat`. It reads the counters macOS keeps
-for every process (`proc_pid_rusage`, no root needed): wall and CPU time,
-`cycles` and `instructions` over all cores, the share of both that ran on
-performance cores (`p-cycles`, `p-instructions`) and the kernel's `energy`
-estimate. `perf.json` has the same layout as the Linux one. Instructions
-vary by well under 1% between runs; cycles and times depend on which cores the
-scheduler picks, which macOS does not let a process choose -- watch `p-cycles`
-against `cycles`, and close what else is running. Branch and cache events
-would need Apple's private kperf framework and root, so they are missing.
+for every process (`proc_pid_rusage`, no root needed): wall and CPU time, the
+latter split into `user-time` and `system-time`, `cycles` and `instructions`
+over all cores, the share of both that ran on performance cores (`p-cycles`,
+`p-instructions`) and the kernel's `energy` estimate. `perf.json` has the
+same layout as the Linux one. Branch and cache events would need Apple's
+private kperf framework and root, so they are missing.
+
+These counts include what the kernel executes on the process's behalf, and
+there is no user-only count without root. For `Zend/bench.php`, which barely
+calls the kernel, that makes no difference: instructions agree within 1%
+between runs. Symfony and WordPress do: Symfony checks some 700 files per
+request, and each `access()` costs the kernel 5,000 to 13,000 instructions --
+about 40% of Symfony's CPU time is `system-time`. An Endpoint Security agent
+(CrowdStrike Falcon, say, which inspects file events) adds to that, by an
+amount that depends on its state. Two runs of the same build, twelve minutes
+apart, measured Symfony at 133M and 161M instructions per request (+21%), and
+later runs stayed at about 160M; the low run could not be reproduced. So:
+
+- treat Symfony and WordPress `cycles`/`instructions` as noisy, and check
+  whether a change shows in `user-time` (PHP) or only in `system-time` (kernel);
+- compare runs made back to back, alternating base and head;
+- for small differences use callgrind in the VM, which counts user-space
+  instructions only and is deterministic.
+
+Cycles and times also depend on which cores the scheduler picks, which macOS
+does not let a process choose -- watch `p-cycles` against `cycles`, and close
+what else is running.
 
 The build needs Homebrew's autoconf, bison, re2c, pkg-config, openssl@3, gmp,
 sqlite, oniguruma, libiconv and mariadb. WordPress gets a throwaway MariaDB of
-its own on port 33306; one you run yourself is not touched. `bench.sh`'s
+its own on port 33306; one you run yourself is not touched. The Symfony Demo
+and WordPress are cloned once into `php-src/build/macos-bench/repos` instead
+of sharing the containers' `php-src/benchmark/repos`: Symfony keeps its cache
+inside the project, and a cache rebuilt on macOS broke the next
+`cache:warmup` in a container, which saw it through the VM's file sharing. `bench.sh`'s
 callgrind and memory modes have no macOS counterpart: valgrind does not run on
 current macOS, and the memory script needs GNU time.
 
@@ -328,6 +390,7 @@ USE_ZEND_ALLOC=0 heaptrack sapi/cli/php script.php
 | `bin/bench.sh` | Run the callgrind, memory and perf benchmarks, store results in `bench-results/` |
 | `bin/bench-memory.php` | Memory measurements of the benchmark workloads (run by `bench.sh`) |
 | `bin/bench-perf.php` | `perf stat` measurements of the benchmark workloads (run by `bench.sh` and `bench-macos.sh`) |
+| `bin/bench-diff.php` | Compare two result directories, as JSON and Markdown |
 | `bin/bench-macos.sh` | The perf benchmark natively on an Apple Silicon Mac, with hardware counters |
 | `bin/macos/pmcstat.c` | `perf stat` stand-in for macOS (built by `bench-macos.sh`) |
 | `bin/make.sh` | Run make in the per-arch build directory |
