@@ -171,7 +171,8 @@ done < <(arch_build_env "${ARCH}")
 # Forward the knobs the in-container scripts read. Without this a host-side
 # `PHP_SRC_BUILD_DIR=... ./bin/configure-minimal.sh arm64` is silently ignored,
 # because configure_run evaluates it on the far side of docker run.
-for var in PHP_SRC_BUILD_DIR PHP_SRC_BUILD_VARIANT PHP_SRC_FPMATH; do
+for var in PHP_SRC_BUILD_DIR PHP_SRC_BUILD_VARIANT PHP_SRC_FPMATH \
+           PHP_SRC_BENCH_PERF_RUNS PHP_SRC_BENCH_PERF_EVENTS; do
     [[ -n "${!var:-}" ]] && ENV_ARGS+=(-e "${var}=${!var}")
 done
 

@@ -203,6 +203,7 @@ tracing JIT -- against a release build of the checkout:
 ./bin/bench.sh                 # host arch: callgrind and memory
 ./bin/bench.sh -- memory       # only the fast one
 ./bin/bench.sh -- callgrind    # only instruction counts (tens of minutes)
+./bin/bench.sh -- perf         # perf stat on the real CPU, not run by default
 ```
 
 - **callgrind** runs upstream's `benchmark/benchmark.php`: instructions per
@@ -211,11 +212,20 @@ tracing JIT -- against a release build of the checkout:
   compare directly, and amd64 numbers are comparable with php-src CI.
 - **memory** (`bin/bench-memory.php`): peak RSS of the `php-cgi` process and
   `memory_get_peak_usage()` of a request, same workloads and settings.
+- **perf** (`bin/bench-perf.php`): `perf stat` per request -- wall time
+  (`duration_time`), `task-clock`, cycles, instructions, branch and cache
+  misses -- with perf's run-to-run variation, over
+  `PHP_SRC_BENCH_PERF_RUNS` runs (default 5). `PHP_SRC_BENCH_PERF_EVENTS`
+  replaces the event list (perf's `-e` syntax). These are real timings, so
+  they are noisier than callgrind and only comparable between runs on the
+  same machine; events the machine cannot count are `null` (see the table
+  below). Per-request values follow `benchmark.php`: the whole process,
+  start-up and warm-up included, divided by the measured requests.
 
 Results land in `bench-results/<time>-<host>-<arch>-<commit>/` (not version
-controlled): `callgrind.json`, `memory.json`, `meta.json` (host, CPU, kernel,
-commit, compiler), the build's `php -v`/`php -m`/configure line, the
-`callgrind.out.*` profiles and the logs. Copy the directories from each machine
+controlled): `callgrind.json`, `memory.json`, `perf.json`, `meta.json` (host,
+CPU, kernel, commit, compiler, valgrind and perf versions), the build's
+`php -v`/`php -m`/configure line, the `callgrind.out.*` profiles and the logs. Copy the directories from each machine
 into one place to compare them.
 
 The build is `php-src/build/<arch>-bench`, configured by `configure-bench.sh`

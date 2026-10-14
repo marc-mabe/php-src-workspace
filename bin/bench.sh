@@ -7,7 +7,7 @@ source "${SCRIPT_DIR}/lib.sh"
 
 usage() {
     cat <<'EOF'
-Usage: bench.sh [arm64|amd64|arm32|i386] [-- callgrind|memory ...]
+Usage: bench.sh [arm64|amd64|arm32|i386] [-- callgrind|memory|perf ...]
 
 Benchmark the php-src checkout with the workloads of php-src's own BENCHMARKING
 CI job -- Zend/bench.php, the Symfony Demo and WordPress, each with and without
@@ -19,9 +19,15 @@ the tracing JIT -- and store the results under bench-results/.
              hosts of one architecture. Slow: tens of minutes.
   memory     bin/bench-memory.php: peak RSS of the php-cgi process and the
              Zend allocator's peak per request. Fast.
+  perf       bin/bench-perf.php: `perf stat` per request -- wall time,
+             task-clock, cycles, instructions, branch and cache misses --
+             averaged over PHP_SRC_BENCH_PERF_RUNS runs (default 5). Real
+             time on the real CPU, so noisier than callgrind and only
+             comparable on one machine. Fast.
 
-Both run by default. The release build lives in php-src/build/<arch>-bench and
-is configured (bin/configure-bench.sh) and brought up to date first.
+callgrind and memory run by default. The release build lives in
+php-src/build/<arch>-bench and is configured (bin/configure-bench.sh) and
+brought up to date first.
 
 Only an architecture the host runs natively gives meaningful numbers: arm64 on
 Apple Silicon, amd64 on an x86-64 Linux host. Others are refused unless
@@ -31,13 +37,15 @@ Each run gets its own directory, bench-results/<time>-<host>-<arch>-<commit>/:
   callgrind.json   instructions per workload (benchmark.php's summary)
   callgrind/       callgrind.out.* profiles, for callgrind_annotate/KCachegrind
   memory.json      peak RSS and Zend peak per workload
-  meta.json        host, CPU, kernel, commit, compiler, valgrind version
+  perf.json        perf stat events per workload
+  meta.json        host, CPU, kernel, commit, compiler, valgrind and perf versions
   build.txt        php -v, php -m and the configure line
   *.log            full output
 
 Examples:
   bench.sh
   bench.sh amd64
+  bench.sh -- perf
   bench.sh -- memory
 EOF
 }
@@ -49,8 +57,8 @@ MODES=(${ARGS[@]+"${ARGS[@]}"})
 [[ ${#MODES[@]} -gt 0 ]] || MODES=(callgrind memory)
 for mode in "${MODES[@]}"; do
     case "${mode}" in
-        callgrind|memory) ;;
-        *) die "Unknown benchmark '${mode}'. Expected callgrind or memory." ;;
+        callgrind|memory|perf) ;;
+        *) die "Unknown benchmark '${mode}'. Expected callgrind, memory or perf." ;;
     esac
 done
 
@@ -176,6 +184,7 @@ PHP_SRC_BENCH_ARCH="${arch}" \
         "php" => PHP_VERSION,
         "compiler" => trim(strtok(shell_exec("cc --version"), "\n")),
         "valgrind" => trim((string) shell_exec("valgrind --version 2>/dev/null")) ?: null,
+        "perf" => trim((string) shell_exec("perf --version 2>/dev/null")) ?: null,
         "date" => gmdate("c"),
     ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES), "\n";
 ' > "${results_dir}/meta.json"
@@ -206,6 +215,14 @@ for mode in "${MODES[@]}"; do
                 > "${results_dir}/memory.log" 2>&1 \
                 || die "bench-memory.php failed; see ${results_dir}/memory.log"
             cat "${results_dir}/memory.json"
+            ;;
+        perf)
+            command -v perf >/dev/null || die "perf is not installed in this image."
+            echo "Running perf benchmarks (bin/bench-perf.php)..."
+            "${no_aslr[@]}" "${php}" "${SCRIPT_DIR}/bench-perf.php" "${php_cgi}" "${results_dir}/perf.json" \
+                > "${results_dir}/perf.log" 2>&1 \
+                || die "bench-perf.php failed; see ${results_dir}/perf.log"
+            cat "${results_dir}/perf.json"
             ;;
     esac
 done
