@@ -191,8 +191,9 @@ PHP_SRC_BENCH_ARCH="${arch}" \
 
 # ASLR moves buffers to different alignments from run to run, which changes
 # which memcpy/SIMD paths are taken; CI switches it off machine-wide for that.
-# setarch -R does it for this process tree only.
-no_aslr=(setarch "$(uname -m)" -R)
+# setarch -R does it for this process tree only. Without an architecture
+# argument: under qemu-arm, setarch armv7l fails to set the personality.
+no_aslr=(setarch -R)
 
 for mode in "${MODES[@]}"; do
     case "${mode}" in

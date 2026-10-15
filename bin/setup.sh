@@ -122,21 +122,26 @@ else
         --cpus "${CPUS}" "${WORKSPACE_ROOT}/lima.yaml"
 fi
 
-echo "Re-registering QEMU binfmt handlers (needed after VM reboot)..."
-limactl shell "${LIMA_INSTANCE}" -- docker run --privileged --rm tonistiigi/binfmt --install all || true
-
-# tonistiigi/binfmt will not register qemu-arm on an arm64 host: the kernel is
-# built with CONFIG_COMPAT, so it advertises AArch32 and the handler looks
-# unnecessary. Apple Silicon does not implement AArch32 at EL0, so 32-bit ARM
-# binaries then fail with "exec format error" and nothing emulates them.
-# Register it by hand against the VM's own qemu-arm; the daemon restart below
-# is what makes docker notice, as it caches its platform list at startup.
-echo "Registering the 32-bit ARM handler (skipped by binfmt on arm64 hosts)..."
+# The VM's qemu-user-binfmt package registers the QEMU handlers at every boot,
+# except qemu-arm: the arm64 kernel is built with CONFIG_COMPAT, so it
+# advertises AArch32 and the handler looks unnecessary. Apple Silicon does not
+# implement AArch32 at EL0, so 32-bit ARM binaries then fail with "exec format
+# error" and nothing emulates them. Add it as a binfmt.d entry, which
+# systemd-binfmt registers at every boot like the others, and register it now.
+# The daemon restart below is what makes docker notice, as it caches its
+# platform list at startup.
+#
+# Do not use tonistiigi/binfmt here. Docker runs rootless, and since Linux 6.7
+# binfmt_misc can be sandboxed per user namespace: its privileged container
+# mounts binfmt_misc and so gives the whole rootless user namespace a new, empty
+# set of handlers. Its registrations go away with the container, and until
+# docker is restarted no foreign architecture runs at all, amd64 included.
+echo "Registering the 32-bit ARM handler (not registered by qemu-user-binfmt on arm64)..."
 limactl shell "${LIMA_INSTANCE}" -- sudo sh -c '
-    [ -e /proc/sys/fs/binfmt_misc/qemu-arm ] && exit 0
     [ -x /usr/bin/qemu-arm ] || exit 0
-    printf "%s" ":qemu-arm:M::\x7fELF\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x28\x00:\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/usr/bin/qemu-arm:OCF" \
-        > /proc/sys/fs/binfmt_misc/register
+    conf=/etc/binfmt.d/qemu-arm.conf
+    [ -e "$conf" ] || printf "%s\n" ":qemu-arm:M::\x7fELF\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x28\x00:\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/usr/bin/qemu-arm:OCF" > "$conf"
+    [ -e /proc/sys/fs/binfmt_misc/qemu-arm ] || cat "$conf" > /proc/sys/fs/binfmt_misc/register
 ' || true
 
 echo "Ensuring Docker CDI is enabled for Rosetta (amd64 on Apple Silicon)..."
