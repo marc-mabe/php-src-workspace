@@ -1,17 +1,11 @@
 # Dev image for 32-bit i386 builds using multilib on amd64.
 # Matches the approach used by php-src CI (.github/actions/apt-x32).
-FROM --platform=linux/amd64 ubuntu:24.04
+FROM --platform=linux/amd64 ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
 ENV PHP_SRC_DOCKER=1
 
-# python3 is listed explicitly, and natively rather than :i386: enchant pulls in
-# hunspell-en-us -> dictionaries-common, an Architecture: all package whose
-# `Depends: python3` apt otherwise resolves to python3:i386. Configuring that
-# package runs the i386 interpreter, which the emulator building this image
-# cannot execute ("Invalid ELF image for this architecture"). The native build
-# satisfies the same dependency and runs.
 RUN set -eux; \
 dpkg --add-architecture i386; \
 apt-get update -y; \
@@ -21,6 +15,7 @@ apt-get install -y --no-install-recommends \
     build-essential \
     ca-certificates \
     ccache \
+    clang \
     curl \
     firebird-dev:i386 \
     freetds-dev:i386 \
@@ -35,7 +30,7 @@ apt-get install -y --no-install-recommends \
     libdb-dev:i386 \
     libenchant-2-dev:i386 \
     libffi-dev:i386 \
-    libfreetype6-dev:i386 \
+    libfreetype-dev:i386 \
     libgdbm-dev:i386 \
     libgmp-dev:i386 \
     libicu-dev:i386 \
@@ -58,7 +53,6 @@ apt-get install -y --no-install-recommends \
     locales \
     make \
     pkg-config:i386 \
-    python3 \
     re2c \
     unixodbc-dev:i386 \
     unzip \

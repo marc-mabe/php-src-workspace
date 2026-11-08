@@ -1,5 +1,5 @@
 # Dev image for native 64-bit builds (arm64 or amd64 depending on --platform).
-FROM ubuntu:24.04
+FROM ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
@@ -13,6 +13,7 @@ apt-get install -y --no-install-recommends \
     build-essential \
     ca-certificates \
     ccache \
+    clang \
     curl \
     firebird-dev \
     freetds-dev \
@@ -25,7 +26,7 @@ apt-get install -y --no-install-recommends \
     libedit-dev \
     libenchant-2-dev \
     libffi-dev \
-    libfreetype6-dev \
+    libfreetype-dev \
     libgdbm-dev \
     libgmp-dev \
     libicu-dev \
@@ -90,21 +91,15 @@ fi
 # the WordPress workload. Only the 64-bit images get them: those are the ones
 # that run natively somewhere, and numbers from an emulated container measure
 # the emulator. arm32 is always emulated here and would only build slower.
-#
-# Ubuntu's /usr/bin/perf is a wrapper that looks for the tools matching
-# `uname -r`, which is the host's (or Lima VM's) kernel rather than one the
-# image could know about, so it refuses to run. perf's user space works across
-# kernel versions; put the packaged binary first on PATH instead.
 RUN set -eux; \
 if [ "${TARGETARCH}" = "amd64" ] || [ "${TARGETARCH}" = "arm64" ]; then \
     apt-get update -y; \
     apt-get install -y --no-install-recommends \
         heaptrack \
-        linux-tools-generic \
+        linux-perf \
         mariadb-server \
         time \
         valgrind; \
-    ln -sf "$(ls -d /usr/lib/linux-tools/*/perf | sort -V | tail -n1)" /usr/local/bin/perf; \
     rm -rf /var/lib/apt/lists/*; \
 fi
 
